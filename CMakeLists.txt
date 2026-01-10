@@ -52,9 +52,7 @@ find_package(spdlog REQUIRED)
 
 add_library(${PROJECT_NAME} STATIC ${SRC_FILES})
 
-target_link_libraries(${PROJECT_NAME} PUBLIC ctre::ctre)
 target_link_libraries(${PROJECT_NAME} PUBLIC fmt::fmt)
-target_link_libraries(${PROJECT_NAME} PUBLIC nlohmann_json::nlohmann_json)
 target_link_libraries(${PROJECT_NAME} PUBLIC spdlog::spdlog)
 
 if (${BLUETOOTHCPP_DEV_BUILD})

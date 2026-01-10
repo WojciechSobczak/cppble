@@ -18,8 +18,8 @@ namespace winrt::impl {
 
 
 template <typename T>
-using WinRTIAsyncOperation = winrt::Windows::Foundation::IAsyncOperation<T>;
-using WinRTAsyncStatus = winrt::Windows::Foundation::AsyncStatus;
+using WinIAsyncOperation = winrt::Windows::Foundation::IAsyncOperation<T>;
+using WinAsyncStatus = winrt::Windows::Foundation::AsyncStatus;
 
 using WinBluetoothAdapter = winrt::Windows::Devices::Bluetooth::BluetoothAdapter;
 using WinDeviceInformation = winrt::Windows::Devices::Enumeration::DeviceInformation;

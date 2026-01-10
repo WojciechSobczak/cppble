@@ -5,6 +5,7 @@
 namespace cppble
 {
 
+//TODO: Check with linux api if scanning modes are available and pass is as parameter
 void WinScanner::start(std::function<void(std::unique_ptr<device>)> onDeviceAppear) {
     watcher.ScanningMode(WinRTLowEnergyScaningMode::Active);
     watcher.Received([onDeviceAppear](const WinAdvWatcher&, const WinAdvArgs& args) {

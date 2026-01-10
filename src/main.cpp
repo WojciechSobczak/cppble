@@ -1,8 +1,12 @@
 #include <map>
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/bin_to_hex.h>
+#include <semaphore>
 
-#include "scanner.hpp"
+#include "cppble.hpp"
+
+
+using namespace std::chrono_literals;
 
 int main() {
     spdlog::set_level(spdlog::level::trace);
@@ -18,7 +22,19 @@ int main() {
         devices.insert({std::string(device->name()), std::move(device)});
     });
 
-    while (devices.size() != 2) {
+    while (devices.find("Redmi-Nice") == devices.end()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
+
+    std::binary_semaphore waiter(0);
+
+    auto& phone = devices.at("Redmi-Nice");
+    phone->connect(5s, [&waiter] {
+        spdlog::debug("Connected");
+        waiter.release();
+    }, [&waiter](const cppble::error<cppble::device::connect_error>& error) {
+        spdlog::debug("Error code: {}, Error desc: {}", (int) error.code(), error.description());
+        waiter.release();
+    });
+    waiter.acquire();
 }

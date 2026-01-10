@@ -3,4 +3,5 @@
 #include "adapter.hpp"
 #include "device.hpp"
 #include "scanner.hpp"
+#include "error.hpp"
 
