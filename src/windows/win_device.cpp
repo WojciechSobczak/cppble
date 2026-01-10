@@ -7,6 +7,10 @@
 #include "spdlog/spdlog.h"
 #include "spdlog/fmt/bin_to_hex.h"
 
+#include <semaphore>
+
+#include "../utils/scope_guard.hpp"
+
 
 namespace cppble
 {
@@ -33,11 +37,11 @@ WinDevice::WinDevice(const WinAdvArgs& advertisementArgs) {
 }
 
 std::optional<error<device::connect_error>> WinDevice::connect_wait(const std::chrono::milliseconds timeout) {
-    {
+    if (!this->_device.has_value()) {
         const auto asyncResult = WinNativeDevice::FromBluetoothAddressAsync(this->_addressInt);
-        spdlog::debug("WinDevice::connect(): Device requested. Address: {}", this->_addressStr);
+        spdlog::debug("WinDevice::connect({}): WinNativeDevice requested", this->_addressStr);
         auto waitResult = asyncResult.Status();
-        if (asyncResult.Status() == WinAsyncStatus::Started) {
+        if (waitResult == WinAsyncStatus::Started) {
             waitResult = asyncResult.wait_for(timeout);
         } else {
             return error{connect_error::OS_ERROR, "Failed to start async device retrieval"};
@@ -52,19 +56,30 @@ std::optional<error<device::connect_error>> WinDevice::connect_wait(const std::c
 
         auto device = asyncResult.GetResults();
         if (!device) {
-            spdlog::debug("WinDevice::connect(): Panic. Device nullptr. Address: {}", this->_addressStr);
+            spdlog::debug("WinDevice::connect({}): Panic. Device nullptr", this->_addressStr);
             return error{connect_error::OS_ERROR, "CComPtr winrt::Windows::Devices::Bluetooth::BluetoothLEDevice is nullptr"};
         }
-        spdlog::debug("WinDevice::connect(): Device retrieved. Address: {}", this->_addressStr);
+        spdlog::debug("WinDevice::connect({}): WinNativeDevice retrieved", this->_addressStr);
         this->_device = device;
     }
 
+    if (this->_session.has_value()) {
+        return error{connect_error::OS_ERROR, "WinGattSession already present. Its a bug. Should not happen."};
+    }
+    if (this->connected()) {
+        return error{connect_error::ALREADY_CONNECTED, "Device already connected"};
+    }
 
     {
+        auto sessionCloser = scope_guard([this] {
+            this->_connected.store(false);
+            this->_session = {};
+        });
+
         const auto asyncResult = WinGattSession::FromDeviceIdAsync(this->_device->BluetoothDeviceId());
-        spdlog::debug("WinDevice::connect(): Session requested. Address: {}", this->_addressStr);
+        spdlog::debug("WinDevice::connect({}): WinGattSession requested", this->_addressStr);
         auto waitResult = asyncResult.Status();
-        if (asyncResult.Status() == WinAsyncStatus::Started) {
+        if (waitResult == WinAsyncStatus::Started) {
             waitResult = asyncResult.wait_for(timeout);
         } else {
             return error{connect_error::OS_ERROR, "Failed to start async device retrieval"};
@@ -79,13 +94,52 @@ std::optional<error<device::connect_error>> WinDevice::connect_wait(const std::c
 
         auto session = asyncResult.GetResults();
         if (!session) {
-            spdlog::debug("WinDevice::connect(): Panic. Session nullptr. Address: {}", this->_addressStr);
+            spdlog::debug("WinDevice::connect({}): Panic. Session nullptr.", this->_addressStr);
             return error{connect_error::OS_ERROR, "CComPtr winrt::Windows::Devices::Bluetooth::WinGattSession is nullptr"};
         }
-        spdlog::debug("WinDevice::connect(): Session retrieved. Address: {}", this->_addressStr);
+        spdlog::debug("WinDevice::connect({}): WinGattSession retrieved", this->_addressStr);
         this->_session = session;
-    }
 
+        try {
+            this->_session->MaintainConnection(true);
+        } catch (winrt::hresult_error& e) {
+            return error{connect_error::OS_ERROR, fmt::format("WinGattSession::MaintainConnection(true) error: {}", winrt::to_string(e.message()))};
+        }
+
+        constexpr static auto onConnectionStatusChange = [](WinDevice& device, WinGattSessionStatus status) {
+            spdlog::debug("{} connection status changed: {}", device._addressStr, status == WinGattSessionStatus::Active);
+            device._connected.store(status == WinGattSessionStatus::Active);
+        };
+
+        spdlog::debug("WinDevice::connect({}): Waiting for session status change", this->_addressStr);
+        std::binary_semaphore connectionWaiter(0);
+        try {
+            this->_session->SessionStatusChanged([this, &connectionWaiter](const WinGattSession&, const WinGattSessionStatusChangedEventArgs& args) {
+                onConnectionStatusChange(*this, args.Status());
+                connectionWaiter.release();
+            });
+        } catch (winrt::hresult_error& e) {
+            return error{connect_error::OS_ERROR, fmt::format("WinGattSession::SessionStatusChanged() error: {}", winrt::to_string(e.message()))};
+        }
+
+        auto acquireResult = connectionWaiter.try_acquire_for(timeout);
+        if (!acquireResult) {
+            return error{connect_error::TIMEOUT, "Connection timeout"};
+        }
+        if (!this->connected()) {
+            return error{connect_error::OS_ERROR, "WinGattSessionStatus::Status() Closed after connection attempt" };
+        }
+        try {
+            this->_session->SessionStatusChanged([this](const WinGattSession&, const WinGattSessionStatusChangedEventArgs& args) {
+                onConnectionStatusChange(*this, args.Status());
+            });
+        } catch (winrt::hresult_error& e) {
+            return error{connect_error::OS_ERROR, fmt::format("WinGattSession::SessionStatusChanged() error: {}", winrt::to_string(e.message()))};
+        }
+
+        sessionCloser.cancel();
+        spdlog::debug("{} connected", this->_addressStr);
+    }
     return {};
 }
 
@@ -100,12 +154,33 @@ void WinDevice::connect(const std::chrono::milliseconds timeout, std::function<v
     });
 }
 
-std::optional<error<device::disconnect_error>> WinDevice::disconnect_wait() {
+std::optional<error<device::disconnect_error>> WinDevice::disconnect_wait(const std::chrono::milliseconds timeout) {
+    if (!this->_session.has_value() || !this->connected()) {
+        spdlog::debug("WinDevice::disconnect_wait({}): already disconnected.", this->_addressStr);
+        return error{disconnect_error::NOT_CONNECTED, "Device not connected"};
+    }
+    const auto sessionCloser = scope_guard([this] {
+        this->_connected.store(false);
+        this->_session = {};
+    });
+    try {
+        this->_session->Close();
+    } catch (winrt::hresult_error& e) {
+        return error{disconnect_error::OS_ERROR, fmt::format("WinGattSession::Close() error: {}", winrt::to_string(e.message()))};
+    }
+    spdlog::debug("WinDevice::disconnect_wait({}): session closed.", this->_addressStr);
     return {};
 }
 
-void WinDevice::disconnect() {
-
+void WinDevice::disconnect(const std::chrono::milliseconds timeout, std::function<void()> onSuccess, std::function<void(const error<disconnect_error>&)> onError) {
+    Concurrency::create_task([this, timeout, onSuccess, onError]() {
+        const auto error = this->disconnect_wait(timeout);
+        if (error.has_value()) {
+            onError(error.value());
+        } else {
+            onSuccess();
+        }
+    });
 }
 
 

@@ -39,6 +39,8 @@ using WinNativeDevice = winrt::Windows::Devices::Bluetooth::BluetoothLEDevice;
 using WinConnectionStatus = winrt::Windows::Devices::Bluetooth::BluetoothConnectionStatus;
 
 using WinGattSession = winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattSession;
+using WinGattSessionStatus = winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattSessionStatus;
+using WinGattSessionStatusChangedEventArgs = winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattSessionStatusChangedEventArgs;
 using WinGattDeviceServicesResult = winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattDeviceServicesResult;
 using WinGattDeviceService = winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattDeviceService;
 using WinGattCharacteristic = winrt::Windows::Devices::Bluetooth::GenericAttributeProfile::GattCharacteristic;

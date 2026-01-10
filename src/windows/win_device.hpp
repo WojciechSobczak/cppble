@@ -19,7 +19,7 @@ private:
 
     std::optional<WinNativeDevice> _device{};
     std::optional<WinGattSession> _session{};
-    bool _connected{false};
+    std::atomic_bool _connected{false};
     bool _paired{false};
 
 public:
@@ -34,8 +34,8 @@ public:
     [[nodiscard]] std::optional<error<connect_error>> connect_wait(std::chrono::milliseconds timeout) override;
     void connect(std::chrono::milliseconds timeout, std::function<void()> onSuccess, std::function<void(const error<connect_error>&)> onError) override;
 
-    [[nodiscard]] std::optional<error<disconnect_error>> disconnect_wait() override;
-    void disconnect() override;
+    [[nodiscard]] std::optional<error<disconnect_error>> disconnect_wait(std::chrono::milliseconds timeout) override;
+    void disconnect(std::chrono::milliseconds timeout, std::function<void()> onSuccess, std::function<void(const error<disconnect_error>&)> onError) override;
 
 };
 
