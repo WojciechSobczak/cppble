@@ -13,11 +13,18 @@ class device {
 public:
     virtual ~device() = default;
 
+    constexpr static uint16_t DEFAULT_MTU = 23;
+
     [[nodiscard]] virtual std::string_view name() const = 0;
     [[nodiscard]] virtual std::string_view address() const = 0;
     [[nodiscard]] virtual std::span<const uint8_t> advertisement_bytes() const = 0;
     [[nodiscard]] virtual bool connected() const = 0;
     [[nodiscard]] virtual bool paired() const = 0;
+    [[nodiscard]] virtual uint16_t mtu() const { return DEFAULT_MTU; }
+
+    virtual void on_mtu_changed(std::function<void(uint16_t)> on_mtu_changed) = 0;
+    virtual void on_connected(std::function<void()> on_connected) = 0;
+    virtual void on_disconnected(std::function<void()> on_disconnected) = 0;
 
     enum class connect_error {
         OS_ERROR,
@@ -34,6 +41,7 @@ public:
     };
     [[nodiscard]] virtual std::optional<error<disconnect_error>> disconnect_wait(std::chrono::milliseconds timeout) = 0;
     virtual void disconnect(std::chrono::milliseconds timeout, std::function<void()> onSuccess, std::function<void(const error<disconnect_error>&)> onError) = 0;
+
 };
 
 }

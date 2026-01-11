@@ -4,13 +4,13 @@
 namespace cppble
 {
 
-class scope_guard {
+class ScopeGuard {
 private:
     std::function<void()> destructor{};
     bool ignoreDestructor{false};
 public:
-    explicit scope_guard(const std::function<void()> &guard): destructor(guard) {};
-    ~scope_guard() { if (!this->ignoreDestructor) { destructor(); }};
+    explicit ScopeGuard(const std::function<void()> &guard): destructor(guard) {};
+    ~ScopeGuard() { if (!this->ignoreDestructor) { destructor(); }};
 
     void cancel() { this->ignoreDestructor = true; }
 };

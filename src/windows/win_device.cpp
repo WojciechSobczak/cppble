@@ -9,7 +9,7 @@
 
 #include <semaphore>
 
-#include "../utils/scope_guard.hpp"
+#include "../utils/ScopeGuard.hpp"
 
 
 namespace cppble
@@ -71,10 +71,7 @@ std::optional<error<device::connect_error>> WinDevice::connect_wait(const std::c
     }
 
     {
-        auto sessionCloser = scope_guard([this] {
-            this->_connected.store(false);
-            this->_session = {};
-        });
+        auto sessionCloser = ScopeGuard([this] { this->_session = {}; });
 
         const auto asyncResult = WinGattSession::FromDeviceIdAsync(this->_device->BluetoothDeviceId());
         spdlog::debug("WinDevice::connect({}): WinGattSession requested", this->_addressStr);
@@ -100,41 +97,67 @@ std::optional<error<device::connect_error>> WinDevice::connect_wait(const std::c
         spdlog::debug("WinDevice::connect({}): WinGattSession retrieved", this->_addressStr);
         this->_session = session;
 
+        bool canMaintainConnection = false;
         try {
-            this->_session->MaintainConnection(true);
+            canMaintainConnection = this->_session->CanMaintainConnection();
+        } catch (winrt::hresult_error& e) {
+            return error{connect_error::OS_ERROR, fmt::format("WinGattSession::CanMaintainConnection() error: {}", winrt::to_string(e.message()))};
+        }
+
+        try {
+            if (canMaintainConnection) {
+                this->_session->MaintainConnection(true);
+            }
         } catch (winrt::hresult_error& e) {
             return error{connect_error::OS_ERROR, fmt::format("WinGattSession::MaintainConnection(true) error: {}", winrt::to_string(e.message()))};
         }
 
-        constexpr static auto onConnectionStatusChange = [](WinDevice& device, WinGattSessionStatus status) {
-            spdlog::debug("{} connection status changed: {}", device._addressStr, status == WinGattSessionStatus::Active);
-            device._connected.store(status == WinGattSessionStatus::Active);
-        };
 
-        spdlog::debug("WinDevice::connect({}): Waiting for session status change", this->_addressStr);
         std::binary_semaphore connectionWaiter(0);
         try {
             this->_session->SessionStatusChanged([this, &connectionWaiter](const WinGattSession&, const WinGattSessionStatusChangedEventArgs& args) {
-                onConnectionStatusChange(*this, args.Status());
+                spdlog::debug("{} connection status changed: {}", this->_addressStr, args.Status() == WinGattSessionStatus::Active);
+                if (args.Status() == WinGattSessionStatus::Active) {
+                    this->_on_connected();
+                } else {
+                    this->_on_disconnected();
+                }
                 connectionWaiter.release();
             });
         } catch (winrt::hresult_error& e) {
             return error{connect_error::OS_ERROR, fmt::format("WinGattSession::SessionStatusChanged() error: {}", winrt::to_string(e.message()))};
         }
 
-        auto acquireResult = connectionWaiter.try_acquire_for(timeout);
-        if (!acquireResult) {
-            return error{connect_error::TIMEOUT, "Connection timeout"};
+        if (this->_session->SessionStatus() != WinGattSessionStatus::Active) {
+            spdlog::debug("WinDevice::connect({}): Waiting for session status change", this->_addressStr);
+            auto acquireResult = connectionWaiter.try_acquire_for(timeout);
+            if (!acquireResult) {
+                return error{connect_error::TIMEOUT, "Connection timeout"};
+            }
+            if (!this->connected()) {
+                return error{connect_error::OS_ERROR, "WinGattSessionStatus::Status() Closed after connection attempt" };
+            }
         }
-        if (!this->connected()) {
-            return error{connect_error::OS_ERROR, "WinGattSessionStatus::Status() Closed after connection attempt" };
-        }
+
         try {
             this->_session->SessionStatusChanged([this](const WinGattSession&, const WinGattSessionStatusChangedEventArgs& args) {
-                onConnectionStatusChange(*this, args.Status());
+                spdlog::debug("{} connection status changed: {}", this->_addressStr, args.Status() == WinGattSessionStatus::Active);
+                if (args.Status() == WinGattSessionStatus::Active) {
+                    this->_on_connected();
+                } else {
+                    this->_on_disconnected();
+                }
             });
         } catch (winrt::hresult_error& e) {
             return error{connect_error::OS_ERROR, fmt::format("WinGattSession::SessionStatusChanged() error: {}", winrt::to_string(e.message()))};
+        }
+
+        try {
+            this->_session->MaxPduSizeChanged([this](const WinGattSession& gattSession, const winrt::Windows::Foundation::IInspectable& /*Ignored*/) {
+                this->_on_mtu_changed(gattSession.MaxPduSize());
+            });
+        } catch (winrt::hresult_error& e) {
+            return error{connect_error::OS_ERROR, fmt::format("WinGattSession::MaxPduSizeChanged() error: {}", winrt::to_string(e.message()))};
         }
 
         sessionCloser.cancel();
@@ -154,15 +177,12 @@ void WinDevice::connect(const std::chrono::milliseconds timeout, std::function<v
     });
 }
 
-std::optional<error<device::disconnect_error>> WinDevice::disconnect_wait(const std::chrono::milliseconds timeout) {
+std::optional<error<device::disconnect_error>> WinDevice::disconnect_wait(const std::chrono::milliseconds) {
     if (!this->_session.has_value() || !this->connected()) {
         spdlog::debug("WinDevice::disconnect_wait({}): already disconnected.", this->_addressStr);
         return error{disconnect_error::NOT_CONNECTED, "Device not connected"};
     }
-    const auto sessionCloser = scope_guard([this] {
-        this->_connected.store(false);
-        this->_session = {};
-    });
+    const auto sessionCloser = ScopeGuard([this] { this->_session = {}; });
     try {
         this->_session->Close();
     } catch (winrt::hresult_error& e) {
